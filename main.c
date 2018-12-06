@@ -29,7 +29,7 @@ void ADC10_config(void){
 
     ADC10AE0 |= BIT4;
 
-    ADC10CTL0 = ADC10SR + SREF_0 + ADC10ON;
+    ADC10CTL0 = ADC10SR + SREF_0 + ADC10IE + ADC10ON;
     ADC10CTL1 = INCH_4 + CONSEQ_0 + ADC10SSEL_1;
 
     ADC10CTL0 |= ENC;
@@ -54,26 +54,29 @@ int main(void)
     ADC10_config();
 
     startValue = 0;
+
+    __bis_SR_register(GIE);
+
     for(i = 0; i < 255; i++){
         for(j = 0; j < 255; j++);
     }
     for(i = 0; i < 5; i++){
         ADC10CTL0 |= ADC10SC; // start ADC - single channel no repeat
-        while((ADC10BUSY & ADC10CTL0));
+        __bis_SR_register(LPM3_bits);
         startValue += ADC10MEM; // add conversion result
     }
     startValue = startValue / 5; // average out conversion results
 
     Timer_config();
 
-    __bis_SR_register(LPM3_bits + GIE);
+    __bis_SR_register(LPM3_bits);
 
     return 0;
 }
 
 #pragma vector = ADC10_VECTOR
 __interrupt void ADC10(void){
-
+    __bic_SR_register_on_exit(LPM3_bits);
 }
 
 #pragma vector = TIMERA0_VECTOR
@@ -83,7 +86,8 @@ __interrupt void Timer_A(void){
     P1OUT |= BIT0;
 
     ADC10CTL0 |= ADC10SC;
-    while((ADC10BUSY & ADC10CTL0));
+    __bic_SR_register(GIE);
+    __bis_SR_register(LPM3_bits + GIE);
     currentValue = ADC10MEM;
 
     if(currentValue - startValue > 10 || currentValue - startValue < -10){
@@ -109,7 +113,8 @@ __interrupt void Timer_A(void){
             avg = 0;
             for(j = 0; j < 4; j++){
                 ADC10CTL0 |= ADC10SC;
-                while((ADC10BUSY & ADC10CTL0));
+                __bic_SR_register(GIE);
+                __bis_SR_register(LPM3_bits + GIE);
                 avg += ADC10MEM;
             }
             avg = avg/4;
