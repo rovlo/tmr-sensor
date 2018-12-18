@@ -1,15 +1,13 @@
 #include <msp430.h> 
 
-#define TimerA_constant 6000
+#define TimerA_constant 12000
 #define TXD BIT1
 #define Bit_time 104 //1mhz / 9600
 
-unsigned int TXByte, ADCValue;
-signed int avg, startValue, currentValue;
-unsigned char bitCount, i, j, signalFalling, signalRising,
-        passThroughZero, tmin, tmax, transmitFlag;
-
-volatile signed int savedSamples[20];
+unsigned int TXByte, ADCValue, i;
+signed int fourthValue, previousValue, startValue, currentValue, minValue, maxValue;
+unsigned char bitCount, j, signalFalling, signalRising,
+        passThroughZero, tMin, tMax, transmitFlag;
 
 void Clock_config(void)
 {
@@ -59,9 +57,8 @@ void Transmit()
     __bic_SR_register(GIE);
     __bis_SR_register(GIE);
 
-    TACCTL0 = OUT;                    // TXD Idle as Mark
-                // ACLK, continuous mode
-    //TACCR0 = TAR;                 // Initialize compare register
+    TACCTL0 = OUT;                    
+    
     TACCR0 = Bit_time;               // Set time till first bit
     TAR = 0;
     TACCTL0 = CCIS0 + OUTMOD0 + CCIE; // Set signal, initial value, interrupt enable
@@ -132,78 +129,81 @@ __interrupt void Timer_A(void)
         __bis_SR_register(LPM3_bits + GIE);
         currentValue = ADC10MEM;
 
-        if (currentValue - startValue > 10 || currentValue - startValue < -10)
+        if (currentValue - startValue > 5 || currentValue - startValue < -5)
         {
             __bic_SR_register(LPM3_bits); //turn on CPU
             //activity detected
             //reconfigure ADC10 for slow sampling
 
             ADC10CTL0 &= ~ENC;
-            BCSCTL1 |= DIVA_2; //slow down ACLK by 2 -> 6000 Hz
-            ADC10CTL0 |= ADC10SHT_3; // slow down sampling rate to 3000/(13 ADC10CLK + 64 SHT) = 35 Hz
+            BCSCTL1 |= DIVA_1; //slow down ACLK by 2 -> 6000 Hz
+            ADC10CTL0 |= ADC10SHT_3; // slow down sampling rate to 6000/(13 ADC10CLK + 64 SHT) = 70 Hz
 
-            savedSamples[0] = currentValue - startValue;
+            previousValue = currentValue - startValue;
+            maxValue = previousValue;
+            minValue = previousValue;
 
             ADC10CTL0 |= ENC;
-            tmax = 0;
-            tmin = 0;
+            tMax = 0;
+            tMin = 0;
             signalFalling = 0;
             signalRising = 0;
             passThroughZero = 0;
 
-            // we measure 4 samples, average them out and store them as a single sample because of lacking memory
-            for (i = 1; i < 20; i++)
+            // measure 200 samples, do some comparison
+            for (i = 1; i < 50; i++)
             {
-                avg = 0;
-                for (j = 0; j < 4; j++)
-                {
+                currentValue = 0;
+
+                for (j = 0; j < 4; j++){
                     ADC10CTL0 |= ADC10SC;
                     __bic_SR_register(GIE);
                     __bis_SR_register(LPM3_bits + GIE);
-                    avg += ADC10MEM;
+
+                    currentValue += ADC10MEM;
                 }
+                currentValue /= 4;
+                currentValue -= startValue; // last measured value
 
-                avg = avg / 4;
-                avg -= startValue;
-                savedSamples[i] = avg;
-
-                if (i > 0)
+                if (currentValue < previousValue)
                 {
-                    if (avg < savedSamples[i - 1])
-                    {
-                        signalFalling++;
-                    }
-                    else if (avg > savedSamples[i - 1])
-                    {
-                        signalRising++;
-                    }
-                    if (avg >= 0 && savedSamples[i - 1] < 0
-                            || avg <= 0 && savedSamples[i - 1] > 0)
-                    {
-                        passThroughZero++;
-                    }
-                    if (savedSamples[i] >= savedSamples[tmax])
-                    {
-                        tmax = i;
-                    }
-                    if (savedSamples[i] <= savedSamples[tmin])
-                    {
-                        tmin = i;
-                    }
+                    signalFalling++;
                 }
+                else if (currentValue > previousValue)
+                {
+                    signalRising++;
+                }
+                if ((currentValue >= 0 && previousValue < 0
+                        || currentValue <= 0 && previousValue > 0))
+                {
+                    passThroughZero++;
+                }
+                if (currentValue >= maxValue)
+                {
+                    maxValue = currentValue;
+                    tMax = i;
+                }
+                if (currentValue <= minValue)
+                {
+                    minValue = currentValue;
+                    tMin = i;
+                }
+
+                previousValue = currentValue;
 
             }
 
-            if (passThroughZero >= 2 && signalRising >= 15
-                    && signalFalling <= 15 && tmin <= 5 && tmax >= 10
-                    && tmax <= 15)
+            if (passThroughZero >= 2 && passThroughZero <= 7 && signalRising >= 10
+                    && signalFalling <= 30 && tMin <= 30 && tMax >= tMin
+                    && tMax <= 45
+                    )
             {
                 P1OUT |= BIT6;
             }
 
             ADC10CTL0 &= ~ENC;
             ADC10CTL0 &= ~ADC10SHT_3;
-            BCSCTL1 &= ~DIVA_2;
+            BCSCTL1 &= ~DIVA_1;
             ADC10CTL0 |= ENC;
 
             __bis_SR_register_on_exit(LPM3_bits);
